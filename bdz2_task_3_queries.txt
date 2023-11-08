@@ -1,0 +1,226 @@
+USE BDZ2
+--1
+
+SELECT orddat.book_id, MONTH(ord.date_of_order) as month, SUM(orddat.Price_rur) as summa
+FROM Orders_data as orddat
+	INNER JOIN Orders as ord ON orddat.ndoc = ord.ndoc
+WHERE orddat.qty_ord = orddat.qty_out AND ord.sum_rur = ord.pmnt_rur AND YEAR(ord.date_of_order) ='2021'
+GROUP BY orddat.book_id, MONTH(ord.date_of_order)
+
+--2
+
+SELECT sec.Section, SUM(orddat.Price_RUR)/COUNT(distinct ord.Date_of_Order) as average_day_price
+FROM Sections as sec
+	INNER JOIN Books as bok ON sec.Section_ID = bok.Section_ID
+	INNER JOIN orders_data as orddat ON orddat.Book_ID = bok.Book_ID
+	INNER JOIN Orders as ord ON orddat.ndoc = ord.ndoc
+WHERE MONTH(ord.Date_of_order) = MONTH(GETDATE()) AND YEAR(ord.Date_of_order) = YEAR(GETDATE())
+GROUP BY sec.Section_ID, sec.Section
+
+--3
+
+SELECT t1.rich_cust, t1.summa_zakazov, COUNT(t2.rich_cust) as rank
+FROM (SELECT cust.Customer as rich_cust, SUM(ord.Sum_RUR) as summa_zakazov
+		FROM Customers as cust
+		INNER JOIN Orders as ord ON cust.Cust_ID = ord.Cust_ID
+		WHERE MONTH(ord.Date_of_Order) = MONTH(GETDATE()) AND YEAR(ord.Date_of_Order) = YEAR(GETDATE())
+		GROUP BY cust.cust_ID, cust.Customer) 
+		as t1
+INNER JOIN
+		(SELECT cust.Customer as rich_cust, SUM(ord.Sum_RUR) as summa_zakazov
+		FROM Customers as cust
+		INNER JOIN Orders as ord ON cust.Cust_ID = ord.Cust_ID
+		WHERE MONTH(ord.Date_of_Order) = MONTH(GETDATE()) AND YEAR(ord.Date_of_Order) = YEAR(GETDATE())
+		GROUP BY cust.cust_ID, cust.Customer) 
+		as t2
+ON
+	t1.summa_zakazov <= t2.summa_zakazov
+GROUP BY t1.rich_cust, t1.summa_zakazov
+ORDER BY rank
+
+--4
+
+SELECT cust.Customer, ISNULL(SUM(ord.Pmnt_RUR), 0) as summa_pokupok
+FROM Customers as cust
+	LEFT JOIN Orders as ord ON ord.Cust_ID = cust.Cust_ID
+WHERE MONTH(ord.Date_of_Order) = MONTH(GETDATE()) AND YEAR(ord.Date_of_Order) = YEAR(GETDATE())
+GROUP BY cust.Cust_ID, cust.Customer
+
+--5
+
+DECLARE @border_date datetime
+SET @border_date = '20211001 00:00:00'
+SELECT distinct bok.Book
+FROM Stock as st
+	INNER JOIN Orders_data as orddat ON orddat.Book_ID = st.Book_ID
+	INNER JOIN Books as bok ON bok.Book_ID = st.Book_ID
+	INNER JOIN Orders as ord ON ord.ndoc = orddat.ndoc
+WHERE (st.Qty_in_Stock > 0) AND ( ord.Date_of_Order < DATEADD(day, 1, @border_date) ) -- После - это начиная со 02.10.2021 ?
+
+--6
+
+DECLARE @border_date2 datetime
+SET @border_date2 = '20211001 00:00:00'
+	SELECT distinct cust.Customer, bok.Book
+	FROM Customers as cust
+		INNER JOIN Orders as ord ON ord.Cust_ID = cust.Cust_ID
+		INNER JOIN Orders_data as orddat ON orddat.ndoc = ord.ndoc
+		INNER JOIN Books as bok ON bok.Book_ID = Orddat.Book_ID
+		INNER JOIN Stock as st ON st.Book_ID = bok.Book_ID
+	WHERE st.Qty_in_Stock > 0 AND ord.Date_of_Order < @border_date2
+EXCEPT
+	SELECT distinct cust.Customer, bok.Book
+	FROM Customers as cust
+		INNER JOIN Orders as ord ON ord.Cust_ID = cust.Cust_ID
+		INNER JOIN Orders_data as orddat ON orddat.ndoc = ord.ndoc
+		INNER JOIN Books as bok ON bok.Book_ID = Orddat.Book_ID
+		INNER JOIN Stock as st ON st.Book_ID = bok.Book_ID
+	WHERE st.Qty_in_Stock > 0 AND ord.Date_of_Order >= DATEADD(day, 1, @border_date2)
+
+--7
+
+SELECT CAST(SUM(st.Qty_rsrv) as float)/ CAST(SUM(st.Qty_in_Stock) as float) as percentage_of_quantity,
+	SUM(bok.Price_RUR*st.Qty_rsrv)/SUM(bok.Price_RUR*st.Qty_in_Stock) as percentage_of_price
+FROM Stock as st
+	INNER JOIN Books as bok ON st.Book_ID = st.Book_ID
+
+--8
+
+SELECT Customer, SUM(dolg_of_client) as dolg_of_client, SUM(paid_money_by_customer) as paid_money_by_customer
+FROM
+	(SELECT cust.Customer, SUM(ord.Sum_RuR) as dolg_of_client, 0 as paid_money_by_customer -- zabrali, ne oplatili
+	FROM Customers as cust
+		INNER JOIN Orders as ord ON cust.Cust_ID = ord.Cust_ID
+		INNER JOIN Orders_data as orddat ON ord.ndoc = orddat.ndoc
+		INNER JOIN Books as bok ON orddat.Book_ID = bok.Book_ID
+	WHERE ord.Pmnt_RUR < ord.Sum_RUR AND orddat.Qty_out = orddat.Qty_ord
+	GROUP BY cust.Cust_ID, cust.Customer
+	UNION
+	SELECT cust.Customer, 0 as dolg_of_client, SUM(Sum_RuR) as paid_money_by_customer -- ne zabrali, oplatili
+	FROM Customers as cust
+		INNER JOIN Orders as ord ON cust.Cust_ID = ord.Cust_ID
+		INNER JOIN Orders_data as orddat ON ord.ndoc = orddat.ndoc
+		INNER JOIN Books as bok ON orddat.Book_ID = bok.Book_ID
+	WHERE ord.Pmnt_RUR = ord.Sum_RUR AND orddat.Qty_out < orddat.Qty_ord
+	GROUP BY cust.Cust_ID, cust.Customer) as otchet
+GROUP BY Customer
+
+--9
+
+DECLARE @my_book_id int
+SET @my_book_id = 3
+DECLARE @my_qty int
+SET @my_qty = 2
+DECLARE @my_cust_id int
+SET @my_cust_id = 1
+SELECT 
+CASE
+	WHEN  (@my_qty <= t_quant.qty_ac) AND (t_cust.balance >= @my_qty*t_price.price*0.1 ) THEN 1
+	ELSE 0
+END as answer
+FROM 
+	(SELECT Balance
+	FROM Customers
+	WHERE Cust_ID = @my_cust_id) as t_cust
+	CROSS JOIN
+	(SELECT (Qty_in_Stock - Qty_rsrv) as qty_ac
+	FROM Stock
+	WHERE Book_ID = @my_book_id) as t_quant
+	CROSS JOIN
+	(SELECT Price_RuR as price
+	FROM Books
+	WHERE Book_ID = @my_book_id) as t_price
+
+--10
+UPDATE Orders
+SET Orders.Sum_RuR = orddat.Sum_RuR
+FROM Orders as ord
+INNER JOIN
+	(SELECT orddat.ndoc as ndoc, SUM(orddat.Qty_ord * orddat.Price_RuR) as Sum_RUR
+	FROM Orders_data as orddat
+	GROUP BY orddat.ndoc) as orddat
+ON ord.ndoc = orddat.ndoc
+
+--11
+
+DECLARE @my_ndoc int
+SET @my_ndoc = 14321944
+SELECT ord.ndoc, 
+CASE
+	WHEN ord.Sum_RuR <= cust.Balance THEN 1
+	ELSE 0
+END as enougth_money
+FROM Orders as ord
+	INNER JOIN Customers as cust ON ord.Cust_ID = cust.Cust_ID
+WHERE ord.ndoc = @my_ndoc
+
+--12
+
+DECLARE @ndoc_my int
+SET @ndoc_my = 14321992
+
+UPDATE Orders
+SET Orders.Pmnt_RUR =
+	(SELECT
+	CASE
+		WHEN cust.Balance >= ord.Sum_RuR THEN ord.Sum_RuR
+		WHEN cust.Balance < ord.Sum_RuR THEN ord.Pmnt_RuR
+	END as condition
+	FROM Customers as cust
+		INNER JOIN Orders as ord ON cust.Cust_ID = ord.Cust_ID
+	WHERE ord.ndoc = @ndoc_my)
+WHERE Orders.ndoc = @ndoc_my
+
+UPDATE Customers
+SET Customers.Balance = t_balance.new_balance
+FROM (SELECT cust.Cust_ID as cust_pay_money,
+	CASE
+		WHEN cust.Balance >= ord.Sum_RuR THEN cust.Balance - ord.Sum_RuR
+		WHEN cust.Balance < ord.Sum_RuR THEN cust.Balance
+	END as new_balance
+	FROM Customers as cust
+		INNER JOIN Orders as ord ON cust.Cust_ID = ord.Cust_ID
+	WHERE ord.ndoc = @ndoc_my) as t_balance
+WHERE Customers.Cust_ID = t_balance.cust_pay_money
+
+--13 Предполагается, что при выборе ndoc проверяется условие Stock.Qty_rsrv+qty_ord <=  Stock.Qty_in_Stock 
+DECLARE @my_ndoc2 int
+SET @my_ndoc2 = 14321996
+
+UPDATE Stock
+SET Stock.Qty_rsrv = Stock.Qty_rsrv+qty_ord, Stock.Qty_in_Stock = Stock.Qty_in_Stock
+FROM
+	(SELECT orddat.Book_ID as book_id, SUM(orddat.Qty_ord) as qty_ord 
+	FROM Orders_data as orddat
+		INNER JOIN Stock as st ON orddat.Book_ID = st.Book_ID
+	WHERE orddat.ndoc = @my_ndoc2
+	GROUP BY orddat.Book_ID) as t_res
+WHERE Stock.book_ID = t_res.book_id
+
+--14 Предполагается, что при выборе ndoc 
+-- проверяется условие Stock.Qty_rsrv >= Orders_data.Qty_ord AND Stock.Qty_in_Stock >= Orders_data.Qty_ord
+DECLARE @my_ndoc3 int
+SET @my_ndoc3 = 14352431
+
+UPDATE Stock
+SET Stock.Qty_rsrv = Stock.Qty_rsrv-qty_out, Stock.Qty_in_Stock = Stock.Qty_in_Stock - qty_out
+FROM
+	(SELECT orddat.Book_ID as book_id, SUM(orddat.Qty_out) as qty_out
+	FROM Orders_data as orddat
+		INNER JOIN Stock as st ON orddat.Book_ID = st.Book_ID
+	WHERE orddat.ndoc = @my_ndoc3
+	GROUP BY orddat.Book_ID) as t_res
+WHERE Stock.book_ID = t_res.book_id
+
+--15 
+
+UPDATE Stock
+SET Stock.Qty_rsrv = Stock.Qty_rsrv - t_res.Qty_ord 
+FROM
+	(SELECT orddat.Book_ID, orddat.Qty_ord
+	FROM Orders_Data as orddat
+		INNER JOIN Stock as st ON orddat.Book_ID = st.Book_ID
+		INNER JOIN Orders as ord ON orddat.ndoc = ord.ndoc
+	WHERE CAST(ord.Date_of_Order as date) = CAST( DATEADD(day, -1, GETDATE()) as date) AND (orddat.Qty_ord > orddat.Qty_out) AND (ord.Sum_RUR > ord.Pmnt_RuR) ) 
+	as t_res
+WHERE Stock.Book_ID = t_res.Book_ID
